@@ -1,1 +1,1 @@
-# 6LOWPAN_custamized
+# 6LOWPAN_customized
