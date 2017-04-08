@@ -11,13 +11,32 @@ MODULE_DESCRIPTION("A simple Linux driver");
 MODULE_VERSION("1.0");              
 
 static struct nf_hook_ops nfho;
-static struct net_device *lowpan,*temp;
-static struct net netp;
+static struct net_device *lowpan,*temp,*ethdev;
+static int flag=0;
+//static struct net *net;
 unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state *state)
 {
-	skb->dev = lowpan;
-	printk(KERN_INFO"Device = %s\n",skb->dev->name);
-	return NF_ACCEPT;
+if(skb->dev)
+	{
+	if(flag==0){ethdev = skb->dev; printk("Device assigned =%s\n",ethdev->name);} 
+	else if(flag==1)
+	{
+		printk(KERN_INFO"flag set skb->dev = %u ethdev = %u ethdev->ndo_start_xmit = %u\n"
+			,(unsigned int)skb->dev
+			,(unsigned int)ethdev
+			,(unsigned int)ethdev->netdev_ops->ndo_start_xmit);
+		skb->dev = lowpan;
+		printk(KERN_INFO"Flag set New Device = %s\n",skb->dev->name);
+		return NF_ACCEPT;	
+	}
+	if(!strcmp(ethdev->name,"eth0"))
+	{
+		skb->dev = lowpan;
+		printk(KERN_INFO"ethdev set Device = %s\n",skb->dev->name);
+		flag=1;
+	}
+}
+return NF_ACCEPT;
 }
 static int lowpan_open(struct net_device *dev)
 {
@@ -34,14 +53,17 @@ static int lowpan_close(struct net_device *dev)
 static netdev_tx_t lowpan_xmit(struct sk_buff *skb,struct net_device *dev)
 {
 	printk(KERN_INFO"Freeing skb\n");
-	//dev_kfree_skb(skb);
-	/*temp = dev;
-	temp = next_net_device_rcu(temp);
-	if(temp)
-		printk(KERN_INFO"Device found = %s\n",temp->name);*/
-	temp = dev_get_by_name_rcu(&net,"wlan0");
-	if(temp)
-		printk(KERN_INFO"Device found = %s\n",temp->name);
+	read_lock(&dev_base_lock);
+	temp = first_net_device(&init_net);
+	while(temp){
+		if(!strcmp(temp->name,"eth0")) break;
+		else temp = next_net_device(temp);
+	}
+	read_unlock(&dev_base_lock);
+	printk(KERN_INFO"New ethdev = %u ethdev->ndo_start_xmit = %u\n",(unsigned int)ethdev
+		,(unsigned int)ethdev->netdev_ops->ndo_start_xmit);
+	skb->dev = ethdev;
+	(*ethdev->netdev_ops->ndo_start_xmit)(skb,ethdev);
 	return NETDEV_TX_OK;
 }
 
