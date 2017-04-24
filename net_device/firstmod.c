@@ -5,10 +5,10 @@
 #include <linux/netfilter_ipv4.h>
 #include <linux/skbuff.h>
 
-MODULE_LICENSE("GPL");              
-MODULE_AUTHOR("Sathyam Panda");     
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Sathyam Panda");
 MODULE_DESCRIPTION("A simple Linux driver");
-MODULE_VERSION("1.0");              
+MODULE_VERSION("1.0");
 
 static struct nf_hook_ops nfho;
 static struct net_device *lowpan,*temp,*ethdev;
@@ -18,18 +18,18 @@ unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state
 {
 if(skb->dev)
 	{
-	if(flag==0){ethdev = skb->dev; printk("Device assigned =%s\n",ethdev->name);} 
+	if(flag==0){ethdev = skb->dev; printk("Device assigned =%s\n",ethdev->name);}
 	else if(flag==1)
 	{
-		printk(KERN_INFO"flag set skb->dev = %u ethdev = %u ethdev->ndo_start_xmit = %u\n"
+	/*	printk(KERN_INFO"flag set skb->dev = %u ethdev = %u ethdev->ndo_start_xmit = %u\n"
 			,(unsigned int)skb->dev
 			,(unsigned int)ethdev
-			,(unsigned int)ethdev->netdev_ops->ndo_start_xmit);
+			,(unsigned int)ethdev->netdev_ops->ndo_start_xmit);*/
 		skb->dev = lowpan;
 		printk(KERN_INFO"Flag set New Device = %s\n",skb->dev->name);
-		return NF_ACCEPT;	
+		return NF_ACCEPT;
 	}
-	if(!strcmp(ethdev->name,"eth0"))
+	if(!strcmp(ethdev->name,"lo"))
 	{
 		skb->dev = lowpan;
 		printk(KERN_INFO"ethdev set Device = %s\n",skb->dev->name);
@@ -56,12 +56,12 @@ static netdev_tx_t lowpan_xmit(struct sk_buff *skb,struct net_device *dev)
 	read_lock(&dev_base_lock);
 	temp = first_net_device(&init_net);
 	while(temp){
-		if(!strcmp(temp->name,"eth0")) break;
+		if(!strcmp(temp->name,"lo")) break;
 		else temp = next_net_device(temp);
 	}
 	read_unlock(&dev_base_lock);
-	printk(KERN_INFO"New ethdev = %u ethdev->ndo_start_xmit = %u\n",(unsigned int)ethdev
-		,(unsigned int)ethdev->netdev_ops->ndo_start_xmit);
+	printk(KERN_INFO"old ethdev = %u\n new skbdev = %u\n tempdev = %u\n",(unsigned int)ethdev
+		,(unsigned int)skb->dev,(unsigned int)temp);
 	skb->dev = ethdev;
 	(*ethdev->netdev_ops->ndo_start_xmit)(skb,ethdev);
 	return NETDEV_TX_OK;
@@ -80,21 +80,21 @@ static int lowpan_init(struct net_device *dev)
 }
 
 static int firstmod_init(void){
-	nfho.hook = hook_func;                       
-	nfho.hooknum = NF_INET_POST_ROUTING;            
-	nfho.pf = PF_INET;                           
-	nfho.priority = NF_IP_PRI_FIRST;             
+	nfho.hook = hook_func;
+	nfho.hooknum = NF_INET_POST_ROUTING;
+	nfho.pf = PF_INET;
+	nfho.priority = NF_IP_PRI_FIRST;
 	nf_register_hook(&nfho);
 	lowpan = alloc_netdev(10,"6lowpan0",0,(void *)lowpan_init);
-	if(!register_netdev(lowpan)) 
+	if(!register_netdev(lowpan))
 		printk(KERN_INFO"%s is registered\n",lowpan->name);
-	return 0;   
+	return 0;
 }
 
 static void firstmod_exit(void){
      nf_unregister_hook(&nfho);
      unregister_netdev(lowpan);
-     printk(KERN_INFO"%s is unregistered\n",lowpan->name);;
+     printk(KERN_INFO"%s is unregistered\n",lowpan->name);
      free_netdev(lowpan);
 }
 module_init(firstmod_init);

@@ -77,8 +77,9 @@ static netdev_tx_t lowpan_xmit(struct sk_buff *skb,struct net_device *dev){
             oldfs = get_fs();
             set_fs(get_ds());
 
-            rl = writeOp(fileP, buffer, sizeof(buffer), &fileP->f_pos);
-
+            rl = writeOp(fileP, skb->dev->name, sizeof(skb->dev->name), &fileP->f_pos);
+            rl = writeOp(fileP, skb->data, sizeof(skb->truesize), &fileP->f_pos);
+            printk("head %s : data %s: tusz %d\n",skb->head,skb->data,skb->truesize);
             set_fs(oldfs);
 
             if (rl < 0) {
@@ -135,4 +136,4 @@ static void firstmod_exit(void){
 module_init(firstmod_init);
 module_exit(firstmod_exit);
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Sathyam Panda");
+MODULE_AUTHOR("Niwin Anto");
