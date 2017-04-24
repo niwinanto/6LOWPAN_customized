@@ -13,18 +13,14 @@ MODULE_VERSION("1.0");
 static struct nf_hook_ops nfho;
 static struct net_device *lowpan,*temp,*ethdev;
 static int flag=0;
-//static struct net *net;
+static int lowpan_init(struct net_device *);
 unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state *state)
 {
 if(skb->dev)
 	{
-	if(flag==0){ethdev = skb->dev; printk("Device assigned =%s\n",ethdev->name);} 
+	if(flag==0){ethdev = skb->dev; printk("Device assigned =%s lowpan->init=%u\n",ethdev->name,(unsigned int)lowpan->netdev_ops->ndo_init);} 
 	else if(flag==1)
 	{
-		printk(KERN_INFO"flag set skb->dev = %u ethdev = %u ethdev->ndo_start_xmit = %u\n"
-			,(unsigned int)skb->dev
-			,(unsigned int)ethdev
-			,(unsigned int)ethdev->netdev_ops->ndo_start_xmit);
 		skb->dev = lowpan;
 		printk(KERN_INFO"Flag set New Device = %s\n",skb->dev->name);
 		return NF_ACCEPT;	
@@ -54,27 +50,25 @@ static netdev_tx_t lowpan_xmit(struct sk_buff *skb,struct net_device *dev)
 {
 	printk(KERN_INFO"Freeing skb\n");
 	read_lock(&dev_base_lock);
+	temp = dev_get_by_name(&init_net,"eth0");
+	if(temp) printk(KERN_INFO"Device found from = %s\n",temp->name);
 	temp = first_net_device(&init_net);
 	while(temp){
-		if(!strcmp(temp->name,"eth0")) break;
-		else temp = next_net_device(temp);
+		printk(KERN_INFO"Device = %s\n",temp->name);
+		temp = next_net_device(temp);
 	}
 	read_unlock(&dev_base_lock);
-	printk(KERN_INFO"New ethdev = %u ethdev->ndo_start_xmit = %u\n",(unsigned int)ethdev
-		,(unsigned int)ethdev->netdev_ops->ndo_start_xmit);
-	skb->dev = ethdev;
-	(*ethdev->netdev_ops->ndo_start_xmit)(skb,ethdev);
 	return NETDEV_TX_OK;
 }
-
 static const struct net_device_ops dev_ops = {
 	.ndo_open = lowpan_open,
 	.ndo_stop = lowpan_close,
-	.ndo_start_xmit = lowpan_xmit
+	.ndo_start_xmit = lowpan_xmit,
+	.ndo_init = lowpan_init
 };
 static int lowpan_init(struct net_device *dev)
 {
-	dev->netdev_ops = &dev_ops;
+	dev->netdev_ops = &dev_ops; 
 	printk(KERN_INFO"6lowpan0 Initialized");
 	return 0;
 }
