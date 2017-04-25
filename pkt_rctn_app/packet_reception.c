@@ -8,7 +8,7 @@
 #include <assert.h>
 
 #define READ(i) if(read(fd,str,i)<0)fputs("read() failed!\n",stderr)
-#define MAX_SIZE 88
+#define MAX_SIZE 81
 
 struct lowpan_hdr{
     char *mtype,*m_saddr,*m_daddr;
@@ -19,7 +19,8 @@ struct lowpan_hdr{
     char *hc2;
     char *udp_src,*udp_dst,*udp_len,*udp_cksm;
     char *data;
-}hdr;
+}hdr,temp_hdr[1280];
+char lwpan[1280][MAX_SIZE];
 /*dispatch header fields*/
 #define NALP 0xc0
 #define UC_IPv6 0x41
@@ -64,7 +65,7 @@ int open_port(void)
 }
 
 
-int read_port(int fd){
+int read_port(int fd,int dt_size){
     char *str,c;
     char buffer[MAX_SIZE];
     int n=0,i;
@@ -204,16 +205,60 @@ int read_port(int fd){
     READ(1);
     buffer[n++]=*str; //16bit UDP length -1
     hdr.data = buffer + n - 1;
-    for(i=0;i<(MAX_SIZE-n);i++){
+    int ret = MAX_SIZE - n;
+    if(dt_size == 0){
+        dt_size = MAX_SIZE-n;
+        if(*hdr.data_size < dt_size)
+            dt_size = 0;
+    }
+    for(i=0;i<(dt_size);i++){
         READ(1);
         buffer[n++]=*str;
     }
 
-    return 1;
+    temp_hdr[*hdr.data_offst] = hdr;
+    memcpy(lwpan[*hdr.data_offst],buffer,MAX_SIZE);
+    return ret;
 }
 
 int main(int argc, char *argv[]){
-    int y,x;
+    int y,x,num,rem,i,j;
     x=open_port();
-    y=read_port(x);
+    while(1){
+        num = 0, rem = 0;
+        y=read_port(x,0);
+        num = *hdr.data_size / y ;
+        rem = *hdr.data_size % y ;
+        if(num > 1){
+            for(i=1;i<num;i++){
+                read_port(x,0);
+            }
+            if(rem > 0){
+                read_port(x,rem);
+            }
+        }
+        else if(num == 0 && rem > 0){
+            read_port(x,rem);
+        }
+        if(num > 1){
+            for(i=0;i<num;i++){
+                for(j=0;j<MAX_SIZE;j++){
+                printf("%x\n",lwpan[i][j]);
+                }
+            }
+            if(rem > 0){
+                for(j=0;j<(MAX_SIZE-y+rem);j++){
+                printf("%x\n",lwpan[i][j]);
+                }
+            }
+        }
+        else if(num == 0 && rem > 0){
+            for(j=0;j<(MAX_SIZE-y+rem);j++){
+                printf("%x\n",lwpan[i][j]);
+            }
+        }
+
+
+
+    }
 }
