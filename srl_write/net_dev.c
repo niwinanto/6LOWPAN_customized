@@ -17,37 +17,61 @@
 #define UC_IPV6 	0x41
 #define LOWPAN_HC1 	0x42
 #define LOWPAN_BC0	0x50
-#define MESH 		0x80
-#define FRAG1 		0xc0
-#define FRAGN		0xe0
+#define MESH 		2
+#define FRAG1 		0x18
+#define FRAGN		0x1c
 
 static struct nf_hook_ops nfho;
 static struct net_device *lowpan;
 static struct file *rc;
-static unsigned char eui_64[8]={[3]=0xff,0xfe};
+static unsigned char eui_64[8]={[3]=0xff,0xfe},dest_hwaddr[8]={[3]=0xff,0xfe};
 static unsigned char ipv6_addr[16]={[0]=0xfe,0x80};
-//static unsigned char packet[81];
+static unsigned char mesh_size,HC1_size=1,udp_size=1,frag_size=4,tcp_size=1;
+static unsigned char packet[81],HC1_dispatch[1]={0x42},UCipv6_dispatch[1]={0x41},hoplimit[1];
+static char buffer[50];
 static struct iphdr * ip_header;
 static struct udphdr * udp_header;
 static struct tcphdr * tcp_header ;
 
+static struct fragHeader{
+	unsigned char garbage:3;
+	unsigned char type:5;
+	unsigned char dgram_size;
+	unsigned short dgram_tag; 
+}frag_header;
+
+static struct meshHeader{
+	unsigned char hops_lft:4;
+	unsigned char F:1;
+	unsigned char V:1;
+	unsigned char type:2;
+	unsigned char addr[16];
+}mesh_header;
+
 static struct HC1_encoded{
-	unsigned char s_pi:2;
-	unsigned char d_pi:2;
-	unsigned char tc_fl:1;
-	unsigned char nh:2;
 	unsigned char hc2:1;
+	unsigned char nh:2;
+	unsigned char tc_fl:1;
+	unsigned char d_pi:2;
+	unsigned char s_pi:2;
 }HC1encoded;
 
-static struct HC2_encoded{
-	unsigned char s_port:1;
-	unsigned char d_port:1;
+static struct udpHeader{
+	unsigned char garbage:5;
 	unsigned char len:1;
-}HC2encoded;
+	unsigned char d_port:1;
+	unsigned char s_port:1;
+}udphdr;
+
+static struct tcpHeader{
+	unsigned char len:1;
+	unsigned char d_port:1;
+	unsigned char s_port:1;
+}tcphdr;
 
 static void lowpan_set_addr(void){
-	char buffer[50];
 	int j;
+	char dst_mac[6]={0x74,0x2b,0x62,0xf1,0x85,0x62};
 	struct net_device *eth = dev_get_by_name(&init_net,"eth0");
 	if(eth){
 		memcpy(eui_64,eth->perm_addr,3);
@@ -55,10 +79,12 @@ static void lowpan_set_addr(void){
 		memcpy(lowpan->perm_addr,eui_64,8);
 		memcpy(lowpan->dev_addr,eui_64,8);
 		lowpan->addr_len=8;
+		memcpy(dest_hwaddr,dst_mac,3);
+		memcpy(dest_hwaddr+5,dst_mac+3,3);
 		j=0;
 		for(int i=0;i<8;i+=1)
 		{
-			sprintf(buffer+j,"%02x:",lowpan->dev_addr[i]);
+			sprintf(buffer+j,"%02x:",dest_hwaddr[i]);
 			j+=3;
 		}
 		printk(KERN_INFO"MAC %s\n",buffer);
@@ -72,6 +98,19 @@ static void lowpan_set_addr(void){
 		}
 		printk(KERN_INFO"IPv6 %s\n",buffer);
 	}
+}
+
+static void gen_mesh_header(int src_mode,int dst_mode){
+	mesh_header.type = MESH;
+	mesh_header.V = src_mode;
+	mesh_header.F = dst_mode;
+	mesh_header.hops_lft = 0xe;
+	mesh_size = 0;
+	if(!src_mode){memcpy(mesh_header.addr,eui_64,8);mesh_size+=8;}
+	else{memcpy(mesh_header.addr,eui_64,2);mesh_size+=2;}
+	if(!dst_mode){memcpy(mesh_header.addr+mesh_size,dest_hwaddr,8);mesh_size+=8;}
+	else{memcpy(mesh_header.addr+mesh_size,dest_hwaddr,2);mesh_size+=2;}
+	mesh_size+=1;   //For the Type, V, F, Hops_left
 }
 
 static void ipv6_HC1(int protocol)
@@ -97,68 +136,74 @@ static void ipv6_HC1(int protocol)
 
 static void udp_hc2(struct udphdr *udp_header){
 	if((udp_header->source>=0xf0b0)&&(udp_header->source<=0xf0bf))
-		HC2encoded.s_port=1;    //Partially Compressed source Port
-	else HC2encoded.s_port=0;
+		udphdr.s_port=1;    //Partially Compressed source Port
+	else udphdr.s_port=0;
 	if((udp_header->dest>=0xf0b0)&&(udp_header->dest<=0xf0bf))
-		HC2encoded.d_port=1;    //Partially Compressed dest Port
-	else HC2encoded.d_port=0;
-	HC2encoded.len=1;           //Compressed Length
+		udphdr.d_port=1;    //Partially Compressed dest Port
+	else udphdr.d_port=0;
+	udphdr.len=1;           //Compressed Length
 }
 
-unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state *state){
-	char *raw_data=NULL;
-	//unsigned int raw_data_len=0;
-	ip_header = (struct iphdr *)skb_network_header(skb);
-	if(ip_header)
-	if(ip_header->version==4){
-		//printk("Its a IPv4 packet\n");
-		if(ip_header->protocol==IPPROTO_TCP){
-			tcp_header = (struct tcphdr *)skb_transport_header(skb);
-			raw_data = (char *)(tcp_header + tcp_header->doff * 4);
-			//printk("TCP Data %u\n",(unsigned int)raw_data);
-		}
-		else if(ip_header->protocol==IPPROTO_UDP||ip_header->protocol==IPPROTO_ICMP){
-			udp_header = (struct udphdr *)skb_transport_header(skb);
-			raw_data = (char *)(udp_header + 8);
-			//printk("UDP Data %u\n",(unsigned int)raw_data);
-		}
-		ipv6_HC1(ip_header->protocol);
-		if(HC1encoded.hc2==1){
-			if(HC1encoded.nh==1)
-				udp_hc2(udp_header);
-			else if(HC1encoded.nh==3){}
-			else {}//drop packets;
-		}
-	}
-	/*if(raw_data)
-	{
-		while(raw_data++<=(char *)skb->tail)
-			raw_data_len++;
-		if(raw_data_len){
-			printk("Data length %u bytes\n",raw_data_len);
-			temp = kmalloc(raw_data_len,GFP_KERNEL);
-			if(temp){
-				strncpy(temp,raw_data,raw_data_len);
-				printk("DATA: %s\n",temp);
+static void gen_packet(struct sk_buff *skb,unsigned char *data){
+	unsigned char size=0,offset=0,dgram_offset[1]={offset},free_space,req1,req2;
+	unsigned char port[1];
+	unsigned short s_port_16,d_port_16,checksum_16;
+	memcpy(packet,&mesh_header,mesh_size); size += mesh_size; req1 = size;
+	frag_header.type = FRAG1;
+	if(((unsigned char *)skb->tail - data)<=255)frag_header.dgram_size = (unsigned char *)skb->tail - data;
+	frag_header.dgram_tag = htons(1);
+	//printk(KERN_INFO"size = %u\n",(unsigned char *)skb->tail - data);
+	memcpy(packet+size,&frag_header,frag_size); size += frag_size; req2 = size;
+	memcpy(packet+size,dgram_offset,1); size += 1;
+	memcpy(packet+size,HC1_dispatch,1); size += 1;
+	memcpy(packet+size,&HC1encoded,HC1_size);  size += HC1_size;
+	memcpy(packet+size,hoplimit,1); size += 1;
+	if(HC1encoded.hc2){
+		if(HC1encoded.nh==1){
+			memcpy(packet+size,&udphdr,udp_size); size += udp_size;
+			if(udphdr.s_port){
+				port[0]=udp_header->source-0xf0b0;
+				memcpy(packet+size,port,1); size += 1;
 			}
+			else{
+				s_port_16 = htons(udp_header->source);
+				memcpy(packet+size,&s_port_16,2); size +=2;
+			}
+			if(udphdr.d_port){
+				port[0]=udp_header->dest-0xf0b0;
+				memcpy(packet+size,port,1); size += 1;
+			}
+			else{
+				d_port_16 = htons(udp_header->dest);
+				memcpy(packet+size,&d_port_16,2); size +=2;
+			}
+			checksum_16 = htons(udp_header->check);
+			memcpy(packet+size,&checksum_16,2); size +=2;
 		}
-	}*/
-	return NF_ACCEPT;
+		else if(HC1encoded.nh==3) {memcpy(packet+size,&tcphdr,tcp_size); size += tcp_size;} 
+	}
+	free_space = 80 - size;
+	if(free_space<=(skb->tail-data)){
+		memcpy(packet+size,data,free_space); data +=free_space; packet[req2]+=free_space;
+	}
+	else {memcpy(packet+size,data,(skb->tail-data)); data = skb->tail;}
+	/*Subsequent packet Transmission*/
+	/*Changinging Header field Fragment type*/
+	frag_header.type = FRAGN;
+	memcpy(packet+req1,&frag_header,frag_size);
+	//for(int i=0;i<size;i++)
+	//	printk(KERN_INFO"%d %02x\n",i,packet[i]);
+	while(data<skb->tail){
+		if(free_space<=(skb->tail-data)){
+			memcpy(packet+size,data,free_space); data +=free_space; packet[req2]+=free_space;
+		}
+		else {memcpy(packet+size,data,(skb->tail-data)); data = skb->tail;}
+	}
+	printk(KERN_INFO"Packet generated\n");
 }
+static void tcp_hc2(struct tcphdr *tcp_header){} //Futre Expansion of TCP header compression
 
-static int lowpan_open(struct net_device *dev){
-	printk(KERN_INFO"6lowpan0 is up and running\n");
-	netif_start_queue(dev);
-	return 0;
-}
-
-static int lowpan_close(struct net_device *dev){
-	printk(KERN_INFO"6lowpan0 is stopped\n");
-	netif_stop_queue(dev);
-	return 0;
-}
-
-/*static void write_to_usb(char *packet){
+static void write_to_usb(char *packet){
 
 	struct file * const fileP = rc;
 	printk(KERN_INFO"Writing %s to serial device\n",packet);
@@ -194,10 +239,49 @@ static int lowpan_close(struct net_device *dev){
             else printk("%s: write was successful.\n", __FUNCTION__);
         }
     }
-}*/
+}
+unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state *state){
+	unsigned char *data=NULL;
+	ip_header = (struct iphdr *)skb_network_header(skb);
+	if(ip_header)
+	if(ip_header->version==4){
+		gen_mesh_header(0,0);
+		ipv6_HC1(ip_header->protocol);
+		if(HC1encoded.hc2==1){
+			if(HC1encoded.nh==1){
+				udp_header = (struct udphdr *)skb_transport_header(skb);
+				udp_hc2(udp_header);
+				data = (unsigned char *)udp_header;
+			}
+			else if(HC1encoded.nh==3){
+				tcp_header = (struct tcphdr *)skb_transport_header(skb);
+				tcp_hc2(tcp_header);
+				data = (unsigned char *)tcp_header;
+			}
+			else {}//drop packets;
+		}
+		if(data){
+			gen_packet(skb,data); 
+			write_to_usb(packet);
+		}
+	}
+	return NF_ACCEPT;
+}
+
+static int lowpan_open(struct net_device *dev){
+	printk(KERN_INFO"6lowpan0 is up and running\n");
+	netif_start_queue(dev);
+	return 0;
+}
+
+static int lowpan_close(struct net_device *dev){
+	printk(KERN_INFO"6lowpan0 is stopped\n");
+	netif_stop_queue(dev);
+	return 0;
+}
+
+
 static netdev_tx_t lowpan_xmit(struct sk_buff *skb,struct net_device *dev){
-	//char packet[] = "This is the test data\n";
-	//write_to_usb(packet);
     return NETDEV_TX_OK;
 }
 
