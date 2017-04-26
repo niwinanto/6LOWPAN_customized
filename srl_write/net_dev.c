@@ -27,7 +27,7 @@ static struct file *rc;
 static unsigned char eui_64[8]={[3]=0xff,0xfe},dest_hwaddr[8]={[3]=0xff,0xfe};
 static unsigned char ipv6_addr[16]={[0]=0xfe,0x80};
 static unsigned char mesh_size,HC1_size=1,udp_size=1,frag_size=4,tcp_size=1;
-static unsigned char packet[81],HC1_dispatch[1]={0x42},UCipv6_dispatch[1]={0x41},hoplimit[1];
+static unsigned char packet[81],HC1_dispatch[1]={0x42},hoplimit[1];
 static char buffer[50];
 static struct iphdr * ip_header;
 static struct udphdr * udp_header;
@@ -68,6 +68,33 @@ static struct tcpHeader{
 	unsigned char d_port:1;
 	unsigned char s_port:1;
 }tcphdr;
+
+static void write_to_usb(char *packet){
+
+	struct file * const fileP = rc;
+	printk(KERN_INFO"Writing %s to serial device\n",packet);
+	if (!fileP->f_op)
+        printk("%s: File has no file operations registered!",__FUNCTION__);
+    else {
+        ssize_t (*writeOp)(struct file *, const char *, size_t, loff_t *) = fileP->f_op->write;
+		if (writeOp == NULL)
+            printk("%s: File has no write operation registered!",__FUNCTION__);
+        else {
+            ssize_t rl;
+            mm_segment_t oldfs;
+            const char *buffer = packet;
+			fileP->f_pos = 0;
+            oldfs = get_fs();
+            set_fs(get_ds());
+			rl = writeOp(fileP, buffer, sizeof(buffer), &fileP->f_pos);
+			set_fs(oldfs);
+			if (rl < 0) printk("%s: filesystem driver's write() operation for "
+                        "returned errno %d. ", __FUNCTION__, (int)-rl);
+            else if (rl != sizeof(buffer)) printk("%s: write returned only %d bytes instead of %d.\n",__FUNCTION__, (int)rl, (int)sizeof(buffer));
+            else printk("%s: write was successful.\n", __FUNCTION__);
+        }
+    }
+}
 
 static void lowpan_set_addr(void){
 	int j;
@@ -145,6 +172,8 @@ static void udp_hc2(struct udphdr *udp_header){
 }
 
 static void gen_packet(struct sk_buff *skb,unsigned char *data){
+	unsigned char tot_size;
+	char newline[3]="End";
 	unsigned char size=0,offset=0,dgram_offset[1]={offset},free_space,req1,req2;
 	unsigned char port[1];
 	unsigned short s_port_16,d_port_16,checksum_16;
@@ -182,53 +211,48 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 		}
 		else if(HC1encoded.nh==3) {memcpy(packet+size,&tcphdr,tcp_size); size += tcp_size;} 
 	}
-	free_space = 80 - size;
+	free_space = 81 - size;
 	if(free_space<=(skb->tail-data)){
-		memcpy(packet+size,data,free_space); data +=free_space; packet[req2]+=free_space;
+		memcpy(packet+size,data,free_space); 
+		data +=free_space; 
+		packet[req2]+=free_space;
+		tot_size = size + free_space;
 	}
-	else {memcpy(packet+size,data,(skb->tail-data)); data = skb->tail;}
+	else {memcpy(packet+size,data,(skb->tail-data));
+		tot_size = size + skb->tail-data;
+		data = skb->tail; 
+	}
+	if(HC1encoded.nh==1){
+		printk(KERN_INFO"Packet generated\n");
+		printk(KERN_INFO"FRAG1\n");
+		for(int i=0;i<tot_size;i++)
+			printk(KERN_INFO"%d %02x\n",i,packet[i]);
+	}
+			
 	/*Subsequent packet Transmission*/
 	/*Changinging Header field Fragment type*/
 	frag_header.type = FRAGN;
 	memcpy(packet+req1,&frag_header,frag_size);
-	//for(int i=0;i<size;i++)
-	//	printk(KERN_INFO"%d %02x\n",i,packet[i]);
 	while(data<skb->tail){
 		if(free_space<=(skb->tail-data)){
-			memcpy(packet+size,data,free_space); data +=free_space; packet[req2]+=free_space;
+			memcpy(packet+size,data,free_space); 
+			data +=free_space; 
+			packet[req2]+=free_space;
+			tot_size = size + free_space;
 		}
-		else {memcpy(packet+size,data,(skb->tail-data)); data = skb->tail;}
+		else {memcpy(packet+size,data,(skb->tail-data)); 
+			tot_size = size + skb->tail-data; 
+			data = skb->tail;
+		}
+		if(HC1encoded.nh==1){
+			printk(KERN_INFO"FRAGN\n");
+			for(int i=0;i<tot_size;i++)
+				printk(KERN_INFO"%d %02x\n",i,packet[i]);
+		}
 	}
-	printk(KERN_INFO"Packet generated\n");
 }
 static void tcp_hc2(struct tcphdr *tcp_header){} //Futre Expansion of TCP header compression
 
-static void write_to_usb(char *packet){
-
-	struct file * const fileP = rc;
-	printk(KERN_INFO"Writing %s to serial device\n",packet);
-	if (!fileP->f_op)
-        printk("%s: File has no file operations registered!",__FUNCTION__);
-    else {
-        ssize_t (*writeOp)(struct file *, const char *, size_t, loff_t *) = fileP->f_op->write;
-		if (writeOp == NULL)
-            printk("%s: File has no write operation registered!",__FUNCTION__);
-        else {
-            ssize_t rl;
-            mm_segment_t oldfs;
-            const char *buffer = packet;
-			fileP->f_pos = 0;
-            oldfs = get_fs();
-            set_fs(get_ds());
-			rl = writeOp(fileP, buffer, sizeof(buffer), &fileP->f_pos);
-			set_fs(oldfs);
-			if (rl < 0) printk("%s: filesystem driver's write() operation for "
-                        "returned errno %d. ", __FUNCTION__, (int)-rl);
-            else if (rl != sizeof(buffer)) printk("%s: write returned only %d bytes instead of %d.\n",__FUNCTION__, (int)rl, (int)sizeof(buffer));
-            else printk("%s: write was successful.\n", __FUNCTION__);
-        }
-    }
-}
 unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state *state){
 	unsigned char *data=NULL;
 	ip_header = (struct iphdr *)skb_network_header(skb);
@@ -240,18 +264,17 @@ unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state
 			if(HC1encoded.nh==1){
 				udp_header = (struct udphdr *)skb_transport_header(skb);
 				udp_hc2(udp_header);
-				data = (unsigned char *)udp_header;
+				data = (unsigned char *)udp_header + 8;
 			}
 			else if(HC1encoded.nh==3){
 				tcp_header = (struct tcphdr *)skb_transport_header(skb);
 				tcp_hc2(tcp_header);
-				data = (unsigned char *)tcp_header;
+				data = (unsigned char *)tcp_header + tcp_header->doff*4;
 			}
 			else {}//drop packets;
 		}
 		if(data){
 			gen_packet(skb,data); 
-			write_to_usb(packet);
 		}
 	}
 	return NF_ACCEPT;
@@ -293,7 +316,7 @@ static int firstmod_init(void){
 	nfho.pf = PF_INET;
 	nfho.priority = NF_IP_PRI_FIRST;
 	nf_register_hook(&nfho);
-    rc = filp_open("/dev/ttyUSB0", O_CREAT, 0);
+    rc = filp_open("/dev/ttyUSB1", O_CREAT, 0);
 	lowpan = alloc_netdev(10,"6lowpan0",0,(void *)lowpan_init);
 	if(!register_netdev(lowpan))
 		printk(KERN_INFO"%s is registered\n",lowpan->name);
@@ -306,7 +329,7 @@ static void firstmod_exit(void){
      unregister_netdev(lowpan);
      printk(KERN_INFO"%s is unregistered\n",lowpan->name);
      free_netdev(lowpan);
-    filp_close(rc,NULL);
+     filp_close(rc,NULL);
 }
 
 module_init(firstmod_init);
