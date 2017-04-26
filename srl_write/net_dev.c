@@ -21,6 +21,8 @@
 #define FRAG1 		0x18
 #define FRAGN		0x1c
 
+static unsigned char global=1;
+static unsigned packet_number=0; 
 static struct nf_hook_ops nfho;
 static struct net_device *lowpan;
 static struct file *rc;
@@ -69,7 +71,7 @@ static struct tcpHeader{
 	unsigned char s_port:1;
 }tcphdr;
 
-static void write_to_usb(char *packet){
+static void write_to_usb(char *packet,unsigned char size){
 
 	struct file * const fileP = rc;
 	printk(KERN_INFO"Writing %s to serial device\n",packet);
@@ -86,11 +88,11 @@ static void write_to_usb(char *packet){
 			fileP->f_pos = 0;
             oldfs = get_fs();
             set_fs(get_ds());
-			rl = writeOp(fileP, buffer, sizeof(buffer), &fileP->f_pos);
+			rl = writeOp(fileP, buffer, size, &fileP->f_pos);
 			set_fs(oldfs);
 			if (rl < 0) printk("%s: filesystem driver's write() operation for "
                         "returned errno %d. ", __FUNCTION__, (int)-rl);
-            else if (rl != sizeof(buffer)) printk("%s: write returned only %d bytes instead of %d.\n",__FUNCTION__, (int)rl, (int)sizeof(buffer));
+            else if (rl != size) printk("%s: write returned only %d bytes instead of %d.\n",__FUNCTION__, (int)rl, size);
             else printk("%s: write was successful.\n", __FUNCTION__);
         }
     }
@@ -173,14 +175,14 @@ static void udp_hc2(struct udphdr *udp_header){
 
 static void gen_packet(struct sk_buff *skb,unsigned char *data){
 	unsigned char tot_size;
-	char newline[3]="End";
+	//char newline[3]="End";
 	unsigned char size=0,offset=0,dgram_offset[1]={offset},free_space,req1,req2;
 	unsigned char port[1];
 	unsigned short s_port_16,d_port_16,checksum_16;
 	memcpy(packet,&mesh_header,mesh_size); size += mesh_size; req1 = size;
 	frag_header.type = FRAG1;
 	if(((unsigned char *)skb->tail - data)<=255)frag_header.dgram_size = (unsigned char *)skb->tail - data;
-	frag_header.dgram_tag = htons(1);
+	frag_header.dgram_tag = htons(packet_number++);
 	//printk(KERN_INFO"size = %u\n",(unsigned char *)skb->tail - data);
 	memcpy(packet+size,&frag_header,frag_size); size += frag_size; req2 = size;
 	memcpy(packet+size,dgram_offset,1); size += 1;
@@ -223,10 +225,14 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 		data = skb->tail; 
 	}
 	if(HC1encoded.nh==1){
+		//if(global){
 		printk(KERN_INFO"Packet generated\n");
 		printk(KERN_INFO"FRAG1\n");
 		for(int i=0;i<tot_size;i++)
 			printk(KERN_INFO"%d %02x\n",i,packet[i]);
+		write_to_usb(packet,tot_size);
+		global=0;
+	//}
 	}
 			
 	/*Subsequent packet Transmission*/
@@ -245,9 +251,12 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 			data = skb->tail;
 		}
 		if(HC1encoded.nh==1){
+			//if(global){
 			printk(KERN_INFO"FRAGN\n");
 			for(int i=0;i<tot_size;i++)
 				printk(KERN_INFO"%d %02x\n",i,packet[i]);
+			write_to_usb(packet,tot_size);
+		//}
 		}
 	}
 }
@@ -316,7 +325,7 @@ static int firstmod_init(void){
 	nfho.pf = PF_INET;
 	nfho.priority = NF_IP_PRI_FIRST;
 	nf_register_hook(&nfho);
-    rc = filp_open("/dev/ttyUSB1", O_CREAT, 0);
+    rc = filp_open("/dev/ttyUSB0", O_CREAT, 0);
 	lowpan = alloc_netdev(10,"6lowpan0",0,(void *)lowpan_init);
 	if(!register_netdev(lowpan))
 		printk(KERN_INFO"%s is registered\n",lowpan->name);
