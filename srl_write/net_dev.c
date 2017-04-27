@@ -176,12 +176,18 @@ static void udp_hc2(struct udphdr *udp_header){
 static void gen_packet(struct sk_buff *skb,unsigned char *data){
 	unsigned char tot_size;
 	//char newline[3]="End";
+	unsigned char type;
+	unsigned short bit16 = (unsigned char *)skb->tail - data;
 	unsigned char size=0,offset=0,dgram_offset[1]={offset},free_space,req1,req2;
 	unsigned char port[1];
 	unsigned short s_port_16,d_port_16,checksum_16;
 	memcpy(packet,&mesh_header,mesh_size); size += mesh_size; req1 = size;
 	frag_header.type = FRAG1;
-	if(((unsigned char *)skb->tail - data)<=255)frag_header.dgram_size = (unsigned char *)skb->tail - data;
+	if(bit16>255&&HC1encoded.nh==1){
+	frag_header.dgram_size = bit16;
+	printk(KERN_INFO"size %x\n",bit16);
+	frag_header.garbage = frag_header.garbage | ((bit16>>8)&7);
+	}
 	frag_header.dgram_tag = htons(packet_number++);
 	//printk(KERN_INFO"size = %u\n",(unsigned char *)skb->tail - data);
 	memcpy(packet+size,&frag_header,frag_size); size += frag_size; req2 = size;
@@ -224,13 +230,14 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 		tot_size = size + skb->tail-data;
 		data = skb->tail; 
 	}
-	if(HC1encoded.nh==1){
+	if(HC1encoded.nh==1&&bit16>255){
 		//if(global){
 		printk(KERN_INFO"Packet generated\n");
 		printk(KERN_INFO"FRAG1\n");
-		for(int i=0;i<tot_size;i++)
+		for(int i=0;i<tot_size;i++){
 			printk(KERN_INFO"%d %02x\n",i,packet[i]);
-		write_to_usb(packet,tot_size);
+		}
+		//write_to_usb(packet,tot_size);
 		global=0;
 	//}
 	}
@@ -250,12 +257,13 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 			tot_size = size + skb->tail-data; 
 			data = skb->tail;
 		}
-		if(HC1encoded.nh==1){
+		if(HC1encoded.nh==1&&bit16>255){
 			//if(global){
-			printk(KERN_INFO"FRAGN\n");
-			for(int i=0;i<tot_size;i++)
+			/*printk(KERN_INFO"FRAGN\n");
+			for(int i=0;i<tot_size;i++){
 				printk(KERN_INFO"%d %02x\n",i,packet[i]);
-			write_to_usb(packet,tot_size);
+			}*/
+			//write_to_usb(packet,tot_size);
 		//}
 		}
 	}
@@ -321,7 +329,7 @@ static int lowpan_init(struct net_device *dev){
 
 static int firstmod_init(void){
 	nfho.hook = hook_func;
-	nfho.hooknum = NF_INET_POST_ROUTING;
+	nfho.hooknum = NF_INET_PRE_ROUTING;
 	nfho.pf = PF_INET;
 	nfho.priority = NF_IP_PRI_FIRST;
 	nf_register_hook(&nfho);
