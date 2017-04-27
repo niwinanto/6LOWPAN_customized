@@ -175,19 +175,17 @@ static void udp_hc2(struct udphdr *udp_header){
 
 static void gen_packet(struct sk_buff *skb,unsigned char *data){
 	unsigned char tot_size;
+	unsigned short grand=0;
 	//char newline[3]="End";
-	unsigned char type;
 	unsigned short bit16 = (unsigned char *)skb->tail - data;
 	unsigned char size=0,offset=0,dgram_offset[1]={offset},free_space,req1,req2;
 	unsigned char port[1];
 	unsigned short s_port_16,d_port_16,checksum_16;
 	memcpy(packet,&mesh_header,mesh_size); size += mesh_size; req1 = size;
 	frag_header.type = FRAG1;
-	if(bit16>255&&HC1encoded.nh==1){
 	frag_header.dgram_size = bit16;
-	printk(KERN_INFO"size %x\n",bit16);
+	frag_header.garbage = 0;
 	frag_header.garbage = frag_header.garbage | ((bit16>>8)&7);
-	}
 	frag_header.dgram_tag = htons(packet_number++);
 	//printk(KERN_INFO"size = %u\n",(unsigned char *)skb->tail - data);
 	memcpy(packet+size,&frag_header,frag_size); size += frag_size; req2 = size;
@@ -225,17 +223,21 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 		data +=free_space; 
 		packet[req2]+=free_space;
 		tot_size = size + free_space;
+		grand = grand + free_space;
 	}
 	else {memcpy(packet+size,data,(skb->tail-data));
 		tot_size = size + skb->tail-data;
 		data = skb->tail; 
+		grand = grand + skb->tail-data;
 	}
 	if(HC1encoded.nh==1&&bit16>255){
 		//if(global){
-		printk(KERN_INFO"Packet generated\n");
+		printk(KERN_INFO"\nPacket generated\n");
+		printk(KERN_INFO"size %u\n",bit16);
 		printk(KERN_INFO"FRAG1\n");
 		for(int i=0;i<tot_size;i++){
-			printk(KERN_INFO"%d %02x\n",i,packet[i]);
+			printk(KERN_INFO"%u:%x\n",i,packet[i]);
+			//printk(KERN_INFO"tot %u grand %u \n17 %02x\n18 %02x\n",tot_size,grand,packet[17],packet[18]);
 		}
 		//write_to_usb(packet,tot_size);
 		global=0;
@@ -252,17 +254,21 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 			data +=free_space; 
 			packet[req2]+=free_space;
 			tot_size = size + free_space;
+			grand = grand + free_space;
 		}
 		else {memcpy(packet+size,data,(skb->tail-data)); 
 			tot_size = size + skb->tail-data; 
+			grand = grand + skb->tail-data;
 			data = skb->tail;
 		}
 		if(HC1encoded.nh==1&&bit16>255){
 			//if(global){
-			/*printk(KERN_INFO"FRAGN\n");
+			//printk(KERN_INFO"size %x\n",bit16);
+			printk(KERN_INFO"FRAGN\n");
 			for(int i=0;i<tot_size;i++){
-				printk(KERN_INFO"%d %02x\n",i,packet[i]);
-			}*/
+				printk(KERN_INFO"%u:%x\n",i,packet[i]);
+				//printk(KERN_INFO"tot %u grand %u \n17 %02x\n18 %02x\n",tot_size,grand,packet[17],packet[18]);
+			}
 			//write_to_usb(packet,tot_size);
 		//}
 		}
