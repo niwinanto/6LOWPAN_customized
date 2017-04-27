@@ -21,13 +21,14 @@
 #define FRAG1 		0x18
 #define FRAGN		0x1c
 
+static unsigned packet_number=0; 
 static struct nf_hook_ops nfho;
 static struct net_device *lowpan;
 static struct file *rc;
 static unsigned char eui_64[8]={[3]=0xff,0xfe},dest_hwaddr[8]={[3]=0xff,0xfe};
 static unsigned char ipv6_addr[16]={[0]=0xfe,0x80};
 static unsigned char mesh_size,HC1_size=1,udp_size=1,frag_size=4,tcp_size=1;
-static unsigned char packet[81],HC1_dispatch[1]={0x42},UCipv6_dispatch[1]={0x41},hoplimit[1];
+static unsigned char packet[81],HC1_dispatch[1]={0x42},hoplimit[1];
 static char buffer[50];
 static struct iphdr * ip_header;
 static struct udphdr * udp_header;
@@ -69,6 +70,33 @@ static struct tcpHeader{
 	unsigned char s_port:1;
 }tcphdr;
 
+static void write_to_usb(char *packet,unsigned char size){
+
+	struct file * const fileP = rc;
+	printk(KERN_INFO"Writing %s to serial device\n",packet);
+	if (!fileP->f_op)
+        printk("%s: File has no file operations registered!",__FUNCTION__);
+    else {
+        ssize_t (*writeOp)(struct file *, const char *, size_t, loff_t *) = fileP->f_op->write;
+		if (writeOp == NULL)
+            printk("%s: File has no write operation registered!",__FUNCTION__);
+        else {
+            ssize_t rl;
+            mm_segment_t oldfs;
+            const char *buffer = packet;
+			fileP->f_pos = 0;
+            oldfs = get_fs();
+            set_fs(get_ds());
+			rl = writeOp(fileP, buffer, size, &fileP->f_pos);
+			set_fs(oldfs);
+			if (rl < 0) printk("%s: filesystem driver's write() operation for "
+                        "returned errno %d. ", __FUNCTION__, (int)-rl);
+            else if (rl != size) printk("%s: write returned only %d bytes instead of %d.\n",__FUNCTION__, (int)rl, size);
+            else printk("%s: write was successful.\n", __FUNCTION__);
+        }
+    }
+}
+
 static void lowpan_set_addr(void){
 	int j;
 	char dst_mac[6]={0x74,0x2b,0x62,0xf1,0x85,0x62};
@@ -106,10 +134,22 @@ static void gen_mesh_header(int src_mode,int dst_mode){
 	mesh_header.F = dst_mode;
 	mesh_header.hops_lft = 0xe;
 	mesh_size = 0;
-	if(!src_mode){memcpy(mesh_header.addr,eui_64,8);mesh_size+=8;}
-	else{memcpy(mesh_header.addr,eui_64,2);mesh_size+=2;}
-	if(!dst_mode){memcpy(mesh_header.addr+mesh_size,dest_hwaddr,8);mesh_size+=8;}
-	else{memcpy(mesh_header.addr+mesh_size,dest_hwaddr,2);mesh_size+=2;}
+	if(!src_mode){
+		memcpy(mesh_header.addr,eui_64,8);
+		mesh_size+=8;
+	}
+	else{
+		memcpy(mesh_header.addr,eui_64,2);
+		mesh_size+=2;
+	}
+	if(!dst_mode){
+		memcpy(mesh_header.addr+mesh_size,dest_hwaddr,8);
+		mesh_size+=8;
+	}
+	else{
+		memcpy(mesh_header.addr+mesh_size,dest_hwaddr,2);
+		mesh_size+=2;
+	}
 	mesh_size+=1;   //For the Type, V, F, Hops_left
 }
 
@@ -145,13 +185,19 @@ static void udp_hc2(struct udphdr *udp_header){
 }
 
 static void gen_packet(struct sk_buff *skb,unsigned char *data){
+	unsigned char tot_size;
+	unsigned short grand=0;
+	//char newline[3]="End";
+	unsigned short bit16 = (unsigned char *)skb->tail - data;
 	unsigned char size=0,offset=0,dgram_offset[1]={offset},free_space,req1,req2;
 	unsigned char port[1];
 	unsigned short s_port_16,d_port_16,checksum_16;
 	memcpy(packet,&mesh_header,mesh_size); size += mesh_size; req1 = size;
 	frag_header.type = FRAG1;
-	if(((unsigned char *)skb->tail - data)<=255)frag_header.dgram_size = (unsigned char *)skb->tail - data;
-	frag_header.dgram_tag = htons(1);
+	frag_header.dgram_size = bit16;
+	frag_header.garbage = 0;
+	frag_header.garbage = frag_header.garbage | ((bit16>>8)&7);
+	frag_header.dgram_tag = htons(packet_number++);
 	//printk(KERN_INFO"size = %u\n",(unsigned char *)skb->tail - data);
 	memcpy(packet+size,&frag_header,frag_size); size += frag_size; req2 = size;
 	memcpy(packet+size,dgram_offset,1); size += 1;
@@ -182,53 +228,64 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 		}
 		else if(HC1encoded.nh==3) {memcpy(packet+size,&tcphdr,tcp_size); size += tcp_size;} 
 	}
-	free_space = 80 - size;
+	free_space = 81 - size;
 	if(free_space<=(skb->tail-data)){
-		memcpy(packet+size,data,free_space); data +=free_space; packet[req2]+=free_space;
+		memcpy(packet+size,data,free_space); 
+		data +=free_space; 
+		packet[req2]+=free_space;
+		tot_size = size + free_space;
+		grand = grand + free_space;
 	}
-	else {memcpy(packet+size,data,(skb->tail-data)); data = skb->tail;}
+	else {memcpy(packet+size,data,(skb->tail-data));
+		tot_size = size + skb->tail-data;
+		data = skb->tail; 
+		grand = grand + skb->tail-data;
+	}
+	if(HC1encoded.nh==1&&bit16>255){
+		//if(global){
+		printk(KERN_INFO"\nPacket generated\n");
+		printk(KERN_INFO"size %u\n",bit16);
+		printk(KERN_INFO"FRAG1\n");
+		for(int i=0;i<tot_size;i++){
+			printk(KERN_INFO"%u:%x\n",i,packet[i]);
+			//printk(KERN_INFO"tot %u grand %u \n17 %02x\n18 %02x\n",tot_size,grand,packet[17],packet[18]);
+		}
+		write_to_usb(packet,tot_size);
+	//}
+	}
+			
 	/*Subsequent packet Transmission*/
 	/*Changinging Header field Fragment type*/
 	frag_header.type = FRAGN;
 	memcpy(packet+req1,&frag_header,frag_size);
-	//for(int i=0;i<size;i++)
-	//	printk(KERN_INFO"%d %02x\n",i,packet[i]);
 	while(data<skb->tail){
 		if(free_space<=(skb->tail-data)){
-			memcpy(packet+size,data,free_space); data +=free_space; packet[req2]+=free_space;
+			memcpy(packet+size,data,free_space); 
+			data +=free_space; 
+			packet[req2]+=free_space;
+			tot_size = size + free_space;
+			grand = grand + free_space;
 		}
-		else {memcpy(packet+size,data,(skb->tail-data)); data = skb->tail;}
+		else {memcpy(packet+size,data,(skb->tail-data)); 
+			tot_size = size + skb->tail-data; 
+			grand = grand + skb->tail-data;
+			data = skb->tail;
+		}
+		if(HC1encoded.nh==1&&bit16>255){
+			//if(global){
+			//printk(KERN_INFO"size %x\n",bit16);
+			printk(KERN_INFO"FRAGN\n");
+			for(int i=0;i<tot_size;i++){
+				printk(KERN_INFO"%u:%x\n",i,packet[i]);
+				//printk(KERN_INFO"tot %u grand %u \n17 %02x\n18 %02x\n",tot_size,grand,packet[17],packet[18]);
+			}
+			write_to_usb(packet,tot_size);
+		//}
+		}
 	}
-	printk(KERN_INFO"Packet generated\n");
 }
 static void tcp_hc2(struct tcphdr *tcp_header){} //Futre Expansion of TCP header compression
 
-static void write_to_usb(char *packet){
-
-	struct file * const fileP = rc;
-	printk(KERN_INFO"Writing %s to serial device\n",packet);
-	if (!fileP->f_op)
-        printk("%s: File has no file operations registered!",__FUNCTION__);
-    else {
-        ssize_t (*writeOp)(struct file *, const char *, size_t, loff_t *) = fileP->f_op->write;
-		if (writeOp == NULL)
-            printk("%s: File has no write operation registered!",__FUNCTION__);
-        else {
-            ssize_t rl;
-            mm_segment_t oldfs;
-            const char *buffer = packet;
-			fileP->f_pos = 0;
-            oldfs = get_fs();
-            set_fs(get_ds());
-			rl = writeOp(fileP, buffer, sizeof(buffer), &fileP->f_pos);
-			set_fs(oldfs);
-			if (rl < 0) printk("%s: filesystem driver's write() operation for "
-                        "returned errno %d. ", __FUNCTION__, (int)-rl);
-            else if (rl != sizeof(buffer)) printk("%s: write returned only %d bytes instead of %d.\n",__FUNCTION__, (int)rl, (int)sizeof(buffer));
-            else printk("%s: write was successful.\n", __FUNCTION__);
-        }
-    }
-}
 unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state *state){
 	unsigned char *data=NULL;
 	ip_header = (struct iphdr *)skb_network_header(skb);
@@ -240,18 +297,17 @@ unsigned int hook_func(void *priv,struct sk_buff *skb,const struct nf_hook_state
 			if(HC1encoded.nh==1){
 				udp_header = (struct udphdr *)skb_transport_header(skb);
 				udp_hc2(udp_header);
-				data = (unsigned char *)udp_header;
+				data = (unsigned char *)udp_header + 8;
 			}
 			else if(HC1encoded.nh==3){
 				tcp_header = (struct tcphdr *)skb_transport_header(skb);
 				tcp_hc2(tcp_header);
-				data = (unsigned char *)tcp_header;
+				data = (unsigned char *)tcp_header + tcp_header->doff*4;
 			}
 			else {}//drop packets;
 		}
 		if(data){
 			gen_packet(skb,data); 
-			write_to_usb(packet);
 		}
 	}
 	return NF_ACCEPT;
@@ -289,7 +345,7 @@ static int lowpan_init(struct net_device *dev){
 
 static int firstmod_init(void){
 	nfho.hook = hook_func;
-	nfho.hooknum = NF_INET_POST_ROUTING;
+	nfho.hooknum = NF_INET_PRE_ROUTING;
 	nfho.pf = PF_INET;
 	nfho.priority = NF_IP_PRI_FIRST;
 	nf_register_hook(&nfho);
@@ -306,7 +362,7 @@ static void firstmod_exit(void){
      unregister_netdev(lowpan);
      printk(KERN_INFO"%s is unregistered\n",lowpan->name);
      free_netdev(lowpan);
-    filp_close(rc,NULL);
+     filp_close(rc,NULL);
 }
 
 module_init(firstmod_init);
