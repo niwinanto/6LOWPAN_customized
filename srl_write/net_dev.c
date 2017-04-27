@@ -21,7 +21,6 @@
 #define FRAG1 		0x18
 #define FRAGN		0x1c
 
-static unsigned char global=1;
 static unsigned packet_number=0; 
 static struct nf_hook_ops nfho;
 static struct net_device *lowpan;
@@ -135,10 +134,22 @@ static void gen_mesh_header(int src_mode,int dst_mode){
 	mesh_header.F = dst_mode;
 	mesh_header.hops_lft = 0xe;
 	mesh_size = 0;
-	if(!src_mode){memcpy(mesh_header.addr,eui_64,8);mesh_size+=8;}
-	else{memcpy(mesh_header.addr,eui_64,2);mesh_size+=2;}
-	if(!dst_mode){memcpy(mesh_header.addr+mesh_size,dest_hwaddr,8);mesh_size+=8;}
-	else{memcpy(mesh_header.addr+mesh_size,dest_hwaddr,2);mesh_size+=2;}
+	if(!src_mode){
+		memcpy(mesh_header.addr,eui_64,8);
+		mesh_size+=8;
+	}
+	else{
+		memcpy(mesh_header.addr,eui_64,2);
+		mesh_size+=2;
+	}
+	if(!dst_mode){
+		memcpy(mesh_header.addr+mesh_size,dest_hwaddr,8);
+		mesh_size+=8;
+	}
+	else{
+		memcpy(mesh_header.addr+mesh_size,dest_hwaddr,2);
+		mesh_size+=2;
+	}
 	mesh_size+=1;   //For the Type, V, F, Hops_left
 }
 
@@ -239,8 +250,7 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 			printk(KERN_INFO"%u:%x\n",i,packet[i]);
 			//printk(KERN_INFO"tot %u grand %u \n17 %02x\n18 %02x\n",tot_size,grand,packet[17],packet[18]);
 		}
-		//write_to_usb(packet,tot_size);
-		global=0;
+		write_to_usb(packet,tot_size);
 	//}
 	}
 			
@@ -269,7 +279,7 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 				printk(KERN_INFO"%u:%x\n",i,packet[i]);
 				//printk(KERN_INFO"tot %u grand %u \n17 %02x\n18 %02x\n",tot_size,grand,packet[17],packet[18]);
 			}
-			//write_to_usb(packet,tot_size);
+			write_to_usb(packet,tot_size);
 		//}
 		}
 	}
