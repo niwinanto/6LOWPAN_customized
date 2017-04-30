@@ -12,6 +12,7 @@
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/slab.h>
+#include <asm/byteorder.h>
 
 #define NALP 		0
 #define UC_IPV6 	0x41
@@ -35,39 +36,77 @@ static struct udphdr * udp_header;
 static struct tcphdr * tcp_header ;
 
 static struct fragHeader{
-	unsigned char garbage:3;
-	unsigned char type:5;
+	#ifdef __LITTLE_ENDIAN_BITFIELD
+		unsigned char garbage:3;
+		unsigned char type:5;
+	#endif
+	#ifdef __BIG_ENDIAN_BITFIELD
+		unsigned char type:5;
+		unsigned char garbage:3;
+	#endif
 	unsigned char dgram_size;
 	unsigned short dgram_tag; 
 }frag_header;
 
 static struct meshHeader{
-	unsigned char hops_lft:4;
-	unsigned char F:1;
-	unsigned char V:1;
-	unsigned char type:2;
+	#ifdef __LITTLE_ENDIAN_BITFIELD
+		unsigned char hops_lft:4;
+		unsigned char F:1;
+		unsigned char V:1;
+		unsigned char type:2;
+	#endif
+	#ifdef __BIG_ENDIAN_BITFIELD
+		unsigned char type:2;
+		unsigned char V:1;
+		unsigned char F:1;
+		unsigned char hops_lft:4;
+	#endif
 	unsigned char addr[16];
 }mesh_header;
 
 static struct HC1_encoded{
-	unsigned char hc2:1;
-	unsigned char nh:2;
-	unsigned char tc_fl:1;
-	unsigned char d_pi:2;
-	unsigned char s_pi:2;
+	#ifdef __LITTLE_ENDIAN_BITFIELD
+		unsigned char hc2:1;
+		unsigned char nh:2;
+		unsigned char tc_fl:1;
+		unsigned char d_pi:2;
+		unsigned char s_pi:2;
+	#endif
+	#ifdef __BIG_ENDIAN_BITFIELD
+		unsigned char s_pi:2;
+		unsigned char d_pi:2;
+		unsigned char tc_fl:1;
+		unsigned char nh:2;
+		unsigned char hc2:1;
+	#endif
 }HC1encoded;
 
 static struct udpHeader{
-	unsigned char garbage:5;
-	unsigned char len:1;
-	unsigned char d_port:1;
-	unsigned char s_port:1;
+	#ifdef __LITTLE_ENDIAN_BITFIELD
+		unsigned char garbage:5;
+		unsigned char len:1;
+		unsigned char d_port:1;
+		unsigned char s_port:1;
+	#endif
+	#ifdef __BIG_ENDIAN_BITFIELD
+		unsigned char s_port:1;
+		unsigned char d_port:1;
+		unsigned char len:1
+		unsigned char garbage:5;
+	#endif
 }udphdr;
 
 static struct tcpHeader{
-	unsigned char len:1;
-	unsigned char d_port:1;
-	unsigned char s_port:1;
+	#ifdef __LITTLE_ENDIAN_BITFIELD
+		unsigned char len:1;
+		unsigned char d_port:1;
+		unsigned char s_port:1;
+	#endif
+	#ifdef __BIG_ENDIAN_BITFIELD
+		unsigned char s_port:1;
+		unsigned char d_port:1
+		unsigned char len:1;
+	#endif
 }tcphdr;
 
 static void write_to_usb(char *packet,unsigned char size){
@@ -197,7 +236,7 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 	frag_header.dgram_size = bit16;
 	frag_header.garbage = 0;
 	frag_header.garbage = frag_header.garbage | ((bit16>>8)&7);
-	frag_header.dgram_tag = htons(packet_number++);
+	frag_header.dgram_tag = htons(packet_number);
 	//printk(KERN_INFO"size = %u\n",(unsigned char *)skb->tail - data);
 	memcpy(packet+size,&frag_header,frag_size); size += frag_size; req2 = size;
 	memcpy(packet+size,dgram_offset,1); size += 1;
@@ -243,6 +282,7 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 	}
 	if(HC1encoded.nh==1&&bit16>255){
 		//if(global){
+		packet_number++;
 		printk(KERN_INFO"\nPacket generated\n");
 		printk(KERN_INFO"size %u\n",bit16);
 		printk(KERN_INFO"FRAG1\n");
@@ -274,12 +314,12 @@ static void gen_packet(struct sk_buff *skb,unsigned char *data){
 		if(HC1encoded.nh==1&&bit16>255){
 			//if(global){
 			//printk(KERN_INFO"size %x\n",bit16);
-			printk(KERN_INFO"FRAGN\n");
+			/*printk(KERN_INFO"FRAGN\n");
 			for(int i=0;i<tot_size;i++){
 				printk(KERN_INFO"%u:%x\n",i,packet[i]);
 				//printk(KERN_INFO"tot %u grand %u \n17 %02x\n18 %02x\n",tot_size,grand,packet[17],packet[18]);
 			}
-			write_to_usb(packet,tot_size);
+			write_to_usb(packet,tot_size);*/
 		//}
 		}
 	}
@@ -344,6 +384,12 @@ static int lowpan_init(struct net_device *dev){
 }
 
 static int firstmod_init(void){
+	#ifdef __LITTLE_ENDIAN_BITFIELD
+		printk(KERN_INFO"Little endian\n");
+	#endif
+	#ifdef __BIG_ENDIAN_BITFIELD
+		printk(KERN_INFO"Little endian\n");
+	#endif
 	nfho.hook = hook_func;
 	nfho.hooknum = NF_INET_PRE_ROUTING;
 	nfho.pf = PF_INET;
