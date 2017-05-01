@@ -1,13 +1,5 @@
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <termios.h>
-#include <sys/ioctl.h>
-#include <assert.h>
-extern int errno;
-#define READ(i) if(read(fd,str,i)<0)errnum = errno
+#include<assert.h>
+#define READ(i) *str=Serial.read()
 #define MAX_SIZE 81
 
 struct lowpan_hdr{
@@ -19,8 +11,8 @@ struct lowpan_hdr{
     char *hc2;
     char *udp_src,*udp_dst,*udp_len,*udp_cksm;
     char *data;
-}hdr,temp_hdr[1280];
-char lwpan[1280][MAX_SIZE];
+}hdr,temp_hdr[10];
+//volatile char lwpan[10][MAX_SIZE];
 /*dispatch header fields*/
 #define NALP 0xc0
 #define UC_IPv6 0x41
@@ -50,47 +42,34 @@ char lwpan[1280][MAX_SIZE];
 #define HC_UDP_d 0x40
 #define HC_UDP_len 0x20
 
-
-int open_port(void)
-{
-    int fd;
-    fd = open("/dev/ttyUSB0", O_RDWR | O_NOCTTY );
-    if(fd == -1)
-        perror("open_port: Unable to open /dev/ttyUSB0  ");
-
-    else
-        fcntl(fd, F_SETFL, 0);
-
-    return (fd);
-}
-
-
-int read_port(int fd,int dt_size){
+int con=0;
+ char buffer[MAX_SIZE];
+int read_port(int dt_size){
     char a;
-    char *str=&a;int c,errnum;
-    char buffer[MAX_SIZE];
+    char *str=&a;int c;
+   
     int n=0,i;
-
+    while((con=Serial.available())<=0){;}
     READ(1);
     buffer[n++]=*str;
-    printf("error :%d",errnum);
-  //  printf("%x\n",buffer[0]);
-    printf("%d \n",n);
-    assert((*str & NALP));
+    Serial.println(con);
+    //assert((*str & NALP));
     if( (c=(*str & MESH))== MESH){
-        printf("inside mesh\n");
-       // printf("%d \n",n);
+      Serial.println(1);
         hdr.mtype = buffer + n - 1;
         READ(1);
+        Serial.println(10);
         buffer[n++]=*str; //8bit mesh encoded header
         hdr.m_saddr = buffer + n - 1;
         if(*hdr.mtype & 0x20){
             READ(1);
+            Serial.println(11);
             buffer[n++]=*str;
         }
         else{
             for(i=0;i<7;i++){
                 READ(1);
+                Serial.println(12);
                 buffer[n++]=*str;
             }
         }
@@ -111,8 +90,7 @@ int read_port(int fd,int dt_size){
         buffer[n++]=*str;
     }
     if((c=(*str & FRAG)) == FRAG){
-        printf("inside frag\n");
-        //printf("%d \n",n);
+      Serial.println(2);
         hdr.ftype = buffer + n - 1;
         READ(1);
         buffer[n++]=*str; //11bit datagram size
@@ -135,8 +113,7 @@ int read_port(int fd,int dt_size){
 
     if(*hdr.dispatch & LOWPAN_HC1){
         /*It is a HC1 compressed packet*/
-        printf("  inside HC1\n");
-        //printf("%d \n",n);
+        Serial.println(3);
         READ(1);
         buffer[n++]=*str; //8bit HC1 encoded header
         hdr.hc1 = buffer + n - 1;
@@ -154,8 +131,6 @@ int read_port(int fd,int dt_size){
             }
             else if((c=(*hdr.hc1 & HC1_UDP)) == HC1_UDP ){
                 /*8bit HC2_UDP encoded header*/
-                printf(" inside HC2_UDP\n");
-                printf("%d \n",n);
                 READ(1);
                 buffer[n++]=*str; //8bit HC2 encoded header
                 hdr.hc2 = buffer + n - 1;
@@ -195,7 +170,6 @@ int read_port(int fd,int dt_size){
                 hdr.udp_cksm = buffer + n - 1;
                 READ(1);
                 buffer[n++]=*str; //16bit UDP checksum -2
-                printf("%d \n",n);
             }
             else if((c=(*hdr.hc1 & HC1_ICMP)) == HC1_ICMP){
                 /*8bit HC2_*/
@@ -212,6 +186,7 @@ int read_port(int fd,int dt_size){
     else{
         /*It is a HC1 uncompressed packet*/
     }
+    Serial.println(4);
     if(*hdr.data_size){
         READ(1);
         buffer[n++]=*str; //data starts
@@ -223,50 +198,59 @@ int read_port(int fd,int dt_size){
         if(*hdr.data_size < dt_size)
             dt_size = *hdr.data_size;
     }
-    printf("%d %d\n",ret,n);
     for(i=1;i<(dt_size);i++){
         READ(1);
         buffer[n++]=*str;
-    //    printf("*\n");
     }
-
-    printf("%d %d\n",ret,n);
-    temp_hdr[*hdr.data_offst] = hdr;
-    memcpy(lwpan[*hdr.data_offst],buffer,MAX_SIZE);
+    Serial.println(4);
+    //temp_hdr[*hdr.data_offst] = hdr;
+    Serial.println(5);
+    //memcpy(lwpan[*hdr.data_offst],buffer,MAX_SIZE);
+    Serial.println(51);
     return ret;
 }
 
-int main(int argc, char *argv[]){
-    int y,x,num,rem,i,j;
-    x=open_port();
-    while(1){
+
+void setup() {
+  // put your setup code here, to run once:
+  Serial.begin(9600);
+
+}
+
+void loop() {
+ int y,x,num,rem,i,j;
+        Serial.println("hau");
         num = 0, rem = 0;
-        y=read_port(x,0);
+        y=read_port(0);
         num = *hdr.data_size / y ;
         rem = *hdr.data_size % y ;
-        printf("inside main: data_size:%d datagram tag: %d number of frag:%d number of remining data%d\n",*hdr.data_size,(short)*hdr.data_tag,num,rem);
-        if(num >= 1){
+        Serial.println(num);
+        Serial.println(rem);
+        Serial.println(y);
+        Serial.println(*hdr.data_size,HEX);
+            if(num >= 1){
             for(i=1;i<num;i++){
-                read_port(x,0);
+                read_port(0);
             }
-            printf("num %d and i %d\n",num,i);
             if(rem > 0){
-                read_port(x,rem);
-            }
+                read_port(rem);
+            } 
         }
-
+        Serial.println(6);
         for(i=0;i<num;i++){
             for(j=0;j<MAX_SIZE;j++){
-                printf("%x",lwpan[i][j]);
+                //printf("%x",lwpan[i][j]);
+                Serial.println(buffer[j],HEX);
             }
         }
         if(rem > 0){
             for(j=0;j<(MAX_SIZE-y+rem);j++){
-                printf("%x",lwpan[i][j]);
+                //printf("%x",lwpan[i][j]);
+                Serial.println(buffer[j],HEX);
             }
         }
-        printf("\n***********************\n");
+        //printf("\n***********************\n");
 
-
-    }
+Serial.println("\n");
+   
 }
