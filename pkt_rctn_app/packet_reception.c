@@ -7,7 +7,8 @@
 #include <sys/ioctl.h>
 #include <assert.h>
 extern int errno;
-#define READ(i) if(read(fd,str,i)<0)errnum = errno
+#define READ(i) if(read(fd,str,i)<0){errnum = errno;}\
+    printf("0x%02X ",*str & 0xFF);
 #define MAX_SIZE 81
 
 struct lowpan_hdr{
@@ -70,15 +71,15 @@ int read_port(int fd,int dt_size){
     char *str=&a;int c,errnum;
     char buffer[MAX_SIZE];
     int n=0,i;
-
+    printf("\n");
     READ(1);
     buffer[n++]=*str;
-    printf("error :%d",errnum);
+   // printf("error :%d",errnum);
   //  printf("%x\n",buffer[0]);
-    printf("%d \n",n);
+   // printf("%d \n",n);
     assert((*str & NALP));
     if( (c=(*str & MESH))== MESH){
-        printf("inside mesh\n");
+        printf(": mesh header\nRemaining fields of header :");
        // printf("%d \n",n);
         hdr.mtype = buffer + n - 1;
         READ(1);
@@ -107,11 +108,12 @@ int read_port(int fd,int dt_size){
                 buffer[n++]=*str;
             }
         }
+        printf("\n\n");
         READ(1);
         buffer[n++]=*str;
     }
     if((c=(*str & FRAG)) == FRAG){
-        printf("inside frag\n");
+        printf(": FRAG header\nRemaining fields of FRAG :");
         //printf("%d \n",n);
         hdr.ftype = buffer + n - 1;
         READ(1);
@@ -125,22 +127,25 @@ int read_port(int fd,int dt_size){
         READ(1);
         buffer[n++]=*str; //8bit datagram offset
         hdr.data_offst = buffer + n - 1;
+        printf("\n\n");
         READ(1);
         buffer[n++]=*str;
     }
     if((c = (*str & HC)) == HC){
         hdr.dispatch = buffer + n - 1;
+        printf(": dispatch header\n");
     }
 
 
     if(*hdr.dispatch & LOWPAN_HC1){
         /*It is a HC1 compressed packet*/
-        printf("  inside HC1\n");
+       // printf("  inside HC1\n");
         //printf("%d \n",n);
         READ(1);
         buffer[n++]=*str; //8bit HC1 encoded header
         hdr.hc1 = buffer + n - 1;
 
+        printf(": HC1 header\nRemaining fields of HC header :");
         READ(1);
         buffer[n++]=*str; //8bit hope  header
         hdr.hope = buffer + n - 1;
@@ -154,8 +159,8 @@ int read_port(int fd,int dt_size){
             }
             else if((c=(*hdr.hc1 & HC1_UDP)) == HC1_UDP ){
                 /*8bit HC2_UDP encoded header*/
-                printf(" inside HC2_UDP\n");
-                printf("%d \n",n);
+                //printf(" inside HC2_UDP\n");
+                //printf("%d \n",n);
                 READ(1);
                 buffer[n++]=*str; //8bit HC2 encoded header
                 hdr.hc2 = buffer + n - 1;
@@ -195,7 +200,7 @@ int read_port(int fd,int dt_size){
                 hdr.udp_cksm = buffer + n - 1;
                 READ(1);
                 buffer[n++]=*str; //16bit UDP checksum -2
-                printf("%d \n",n);
+               // printf("%d \n",n);
             }
             else if((c=(*hdr.hc1 & HC1_ICMP)) == HC1_ICMP){
                 /*8bit HC2_*/
@@ -212,6 +217,7 @@ int read_port(int fd,int dt_size){
     else{
         /*It is a HC1 uncompressed packet*/
     }
+     printf("\n\n****data****\n");
     if(*hdr.data_size){
         READ(1);
         buffer[n++]=*str; //data starts
@@ -223,14 +229,15 @@ int read_port(int fd,int dt_size){
         if(*hdr.data_size < dt_size)
             dt_size = *hdr.data_size;
     }
-    printf("%d %d\n",ret,n);
+//    printf("%d %d\n",ret,n);
     for(i=1;i<(dt_size);i++){
         READ(1);
         buffer[n++]=*str;
     //    printf("*\n");
     }
 
-    printf("%d %d\n",ret,n);
+     printf("\n****data****\n");
+  //  printf("%d %d\n",ret,n);
     temp_hdr[*hdr.data_offst] = hdr;
     memcpy(lwpan[*hdr.data_offst],buffer,MAX_SIZE);
     return ret;
@@ -244,7 +251,7 @@ int main(int argc, char *argv[]){
         y=read_port(x,0);
         num = *hdr.data_size / y ;
         rem = *hdr.data_size % y ;
-        printf("inside main: data_size:%d datagram tag: %d number of frag:%d number of remining data%d\n",*hdr.data_size,(short)*hdr.data_tag,num,rem);
+        //printf("inside main: data_size:%d datagram tag: %d number of frag:%d number of remining data%d\n",*hdr.data_size,(short)*hdr.data_tag,num,rem);
         if(num >= 1){
             for(i=1;i<num;i++){
                 read_port(x,0);
@@ -256,16 +263,18 @@ int main(int argc, char *argv[]){
         }
 
         for(i=0;i<num;i++){
+            printf("\n\n#####FRAG NO:%d\n",i);
             for(j=0;j<MAX_SIZE;j++){
-                printf("%x",lwpan[i][j]);
+                printf("0x%02X ",lwpan[i][j] & 0xFF);
             }
         }
         if(rem > 0){
+            printf("\n\n#####FRAG NO:%d\n",i);
             for(j=0;j<(MAX_SIZE-y+rem);j++){
-                printf("%x",lwpan[i][j]);
+                printf("0x%02X ",lwpan[i][j] & 0xFF);
             }
         }
-        printf("\n***********************\n");
+        printf("\n********end**********\n");
 
 
     }
